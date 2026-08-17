@@ -3,8 +3,6 @@
 //                     Created by F8LEFT on 2017/6/28.
 //                   Copyright (c) 2017. All rights reserved.
 //===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef FAOATDUMP_EXELF_H
 #define FAOATDUMP_EXELF_H
@@ -22,6 +20,9 @@ typedef Elf32_Rela Elf_Rela;
 typedef Elf32_Addr Elf_Addr;
 typedef Elf32_Dyn Elf_Dyn;
 typedef Elf32_Word Elf_Word;
+typedef Elf32_Word Elf_Xword;
+typedef Elf32_Half Elf_Half;
+typedef Elf32_Off Elf_Off;
 #else
 typedef Elf64_Ehdr Elf_Ehdr;
 typedef Elf64_Phdr Elf_Phdr;
@@ -33,20 +34,17 @@ typedef Elf64_Rela Elf_Rela;
 typedef Elf64_Addr Elf_Addr;
 typedef Elf64_Dyn Elf_Dyn;
 typedef Elf64_Word Elf_Word;
+typedef Elf64_Xword Elf_Xword;
+typedef Elf64_Half Elf_Half;
+typedef Elf64_Off Elf_Off;
 #endif
 
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 0x1000
 
 #define PAGE_MASK (~(PAGE_SIZE-1))
-// Returns the address of the page containing address 'x'.
 #define PAGE_START(x)  ((x) & PAGE_MASK)
-
-// Returns the offset of address 'x' in its page.
 #define PAGE_OFFSET(x) ((x) & ~PAGE_MASK)
-
-// Returns the address of the next page after address 'x', unless 'x' is
-// itself at the start of a page.
 #define PAGE_END(x)    PAGE_START((x) + (PAGE_SIZE-1))
 #endif
 
@@ -58,6 +56,5 @@ typedef Elf64_Word Elf_Word;
        while(__result == -1L&& errno == EINTR);\
        __result;}))
 #endif
-
 
 #endif //FAOATDUMP_EXELF_H
