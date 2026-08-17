@@ -1,0 +1,63 @@
+name: Build Zygisk Module
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-30" \
+            "build-tools;30.0.3" \
+            "ndk;25.2.9519653" \
+            "cmake;3.18.1"
+
+      - name: Build release module
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew :module:assembleRelease --no-daemon --stacktrace
+
+      - name: Show build outputs
+        if: always()
+        shell: bash
+        run: |
+          find out module/build -maxdepth 8 -type f 2>/dev/null | sort || true
+
+      - name: Upload Magisk module
+        uses: actions/upload-artifact@v4
+        with:
+          name: zygisk-memdump-release
+          path: |
+            out/*.zip
+            module/build/intermediates/stripped_native_libs/release/out/lib/**/*.so
+          if-no-files-found: error
+          retention-days: 14
