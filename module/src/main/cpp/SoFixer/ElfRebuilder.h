@@ -15,6 +15,15 @@
 
 #include "ObElfReader.h"
 
+// The vendored legacy elf.h predates GNU hash definitions used by modern
+// Android ELF files. Keep the compatibility definitions local to SoFixer.
+#ifndef DT_GNU_HASH
+#define DT_GNU_HASH 0x6ffffef5
+#endif
+#ifndef SHT_GNU_HASH
+#define SHT_GNU_HASH 0x6ffffff6
+#endif
+
 #define SOINFO_NAME_LEN 128
 
 struct soinfo {
