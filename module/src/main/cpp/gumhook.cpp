@@ -1,5 +1,6 @@
 #include <atomic>
-#include <regex>
+#include <cstring>
+#include <regex.h>
 #include <string>
 #include <thread>
 #include <android/dlext.h>
@@ -27,6 +28,8 @@ static dumpTargetData data = {};
 static std::string module_name_to_dump;
 static GumInterceptor* unlink_interceptor = nullptr;
 static std::atomic_bool did_dump{false};
+static regex_t compiled_regex{};
+static bool regex_ready = false;
 
 static void delay_dump_thread(std::string package,
                               std::string so_path,
@@ -36,6 +39,15 @@ static void delay_dump_thread(std::string package,
                               uint delay_section) {
     if (delay > 0) usleep(delay);
     dump_so(package, so_path.c_str(), module_base, module_size, delay, delay_section);
+}
+
+static bool regex_matches_full_path(const char* value) {
+    if (!regex_ready || value == nullptr) return false;
+
+    regmatch_t match{};
+    if (regexec(&compiled_regex, value, 1, &match, 0) != 0) return false;
+    return match.rm_so == 0 &&
+           match.rm_eo == static_cast<regoff_t>(strlen(value));
 }
 
 static void schedule_dump(const char* so_name, bool onload) {
@@ -52,13 +64,10 @@ static void schedule_dump(const char* so_name, bool onload) {
     if (!data.name.empty() && strstr(so_name, data.name.c_str()) != nullptr) {
         matched_name = data.name;
         should_dump = true;
-    } else if (data.name.empty() && !data.regex.empty()) {
-        std::regex pattern(data.regex);
-        if (std::regex_match(so_name, pattern)) {
-            const std::string path(so_name);
-            matched_name = path.substr(path.find_last_of('/') + 1);
-            should_dump = true;
-        }
+    } else if (data.name.empty() && regex_matches_full_path(so_name)) {
+        const std::string path(so_name);
+        matched_name = path.substr(path.find_last_of('/') + 1);
+        should_dump = true;
     }
 
     if (!should_dump) return;
@@ -179,7 +188,28 @@ void hookAddress(GumAddress addr,
     data.watch = watch;
     data.name = target;
     data.regex = regex;
-    if (!data.regex.empty()) data.name.clear();
+
+    if (regex_ready) {
+        regfree(&compiled_regex);
+        regex_ready = false;
+    }
+
+    // Compile regex once before the loader hook is active. POSIX regcomp
+    // reports invalid patterns without C++ exceptions; this project uses
+    // -fno-exceptions, so std::regex errors could otherwise terminate the app.
+    if (!data.regex.empty()) {
+        const int rc = regcomp(&compiled_regex, data.regex.c_str(), REG_EXTENDED);
+        if (rc == 0) {
+            regex_ready = true;
+            data.name.clear();
+        } else {
+            char error[160] = {};
+            regerror(rc, &compiled_regex, error, sizeof(error));
+            LOGE("invalid dump regex; ignoring it: %s", error);
+            data.regex.clear();
+            // Keep the explicit target name as a safe fallback when present.
+        }
+    }
 
     data.delay = delay;
     data.delay_section = delay_section;
@@ -188,6 +218,10 @@ void hookAddress(GumAddress addr,
     if (data.watch) {
         data.name.clear();
         data.regex.clear();
+        if (regex_ready) {
+            regfree(&compiled_regex);
+            regex_ready = false;
+        }
         block_deletion = false;
     }
     data.onload = on_load;
