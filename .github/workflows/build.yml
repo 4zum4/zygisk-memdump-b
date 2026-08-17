@@ -20,12 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 11
-        uses: actions/setup-java@v4
+      - name: Set up Java 17 for Android SDK tools
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '11'
-          cache: gradle
+          java-version: '17'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -39,6 +38,13 @@ jobs:
             "build-tools;30.0.3" \
             "ndk;25.2.9519653" \
             "cmake;3.18.1"
+
+      - name: Set up Java 11 for Gradle 7.2
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
 
       - name: Build release module
         shell: bash
