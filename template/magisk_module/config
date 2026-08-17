@@ -9,7 +9,7 @@
                     "regex":".*il2cpp\\.so$",
                     "delay":3,
                     "delay_section":0,
-                    "block_deletion":true,
+                    "block_deletion":false,
                     "on_load":false
                 }
             }

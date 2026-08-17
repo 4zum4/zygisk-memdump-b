@@ -1,0 +1,127 @@
+name: Build Zygisk Module
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 for Android SDK tools
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-30" \
+            "build-tools;30.0.3" \
+            "ndk;25.2.9519653" \
+            "cmake;3.18.1"
+
+      - name: Set up Java 11 for Gradle 7.2 / AGP 7.1.3
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
+
+      - name: Build release Magisk module
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew :module:zipRelease --no-daemon --stacktrace
+
+      - name: Validate outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODULE_ZIP="$(find out -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          test -n "$MODULE_ZIP"
+          unzip -l "$MODULE_ZIP"
+          unzip -l "$MODULE_ZIP" | grep -q 'module.prop'
+          unzip -l "$MODULE_ZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$MODULE_ZIP" | grep -q 'zygisk/arm64-v8a.so'
+          find module/build -type f -name '*.so' -print | sort
+
+      - name: Show build outputs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find out module/build -maxdepth 10 -type f 2>/dev/null | sort || true
+
+      - name: Upload diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UNZIP-FIRST-zygisk-memdump-${{ github.sha }}
+          path: |
+            out/*.zip
+            module/build/intermediates/stripped_native_libs/release/out/lib/**/*.so
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-direct-install:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: UNZIP-FIRST-zygisk-memdump-${{ github.sha }}
+          path: artifact
+
+      - name: Prepare direct-install ZIP
+        id: module
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_ZIP="$(find artifact -type f -path '*/out/*.zip' -print -quit)"
+          test -n "$SOURCE_ZIP"
+          INSTALL_ZIP="zygisk-memdump-direct-install-${GITHUB_RUN_NUMBER}.zip"
+          cp "$SOURCE_ZIP" "$INSTALL_ZIP"
+          unzip -l "$INSTALL_ZIP" | grep -q 'module.prop'
+          unzip -l "$INSTALL_ZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$INSTALL_ZIP" | grep -q 'zygisk/arm64-v8a.so'
+          echo "path=$INSTALL_ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Publish direct-install ZIP as prerelease asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="ci-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            "${{ steps.module.outputs.path }}#zygisk-memdump-direct-install.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "CI build ${GITHUB_RUN_NUMBER}" \
+            --notes "Direct-install APatch/Magisk module built from $GITHUB_SHA. Download the release asset named zygisk-memdump-direct-install.zip; do not flash the GitHub Actions artifact wrapper."
