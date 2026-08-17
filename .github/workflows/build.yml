@@ -8,9 +8,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -19,6 +16,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -60,8 +59,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$(find out -maxdepth 1 -type f -name '*.zip' -print -quit)"
-          find out -maxdepth 1 -type f -name '*.zip' -print -exec unzip -l {} \;
+          MODULE_ZIP="$(find out -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          test -n "$MODULE_ZIP"
+          unzip -l "$MODULE_ZIP"
+          unzip -l "$MODULE_ZIP" | grep -q 'module.prop'
+          unzip -l "$MODULE_ZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$MODULE_ZIP" | grep -q 'zygisk/arm64-v8a.so'
           find module/build -type f -name '*.so' -print | sort
 
       - name: Show build outputs on failure
@@ -70,12 +73,55 @@ jobs:
         run: |
           find out module/build -maxdepth 10 -type f 2>/dev/null | sort || true
 
-      - name: Upload build artifact
+      - name: Upload diagnostic artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zygisk-memdump-release-${{ github.sha }}
+          name: UNZIP-FIRST-zgisk-memdump-${{ github.sha }}
           path: |
             out/*.zip
             module/build/intermediates/stripped_native_libs/release/out/lib/**/*.so
           if-no-files-found: error
           retention-days: 14
+
+  publish-direct-install:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: UNZIP-FIRST-zgisk-memdump-${{ github.sha }}
+          path: artifact
+
+      - name: Prepare direct-install ZIP
+        id: module
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_ZIP="$(find artifact -type f -path '*/out/*.zip' -print -quit)"
+          test -n "$SOURCE_ZIP"
+          INSTALL_ZIP="zygisk-memdump-direct-install-${GITHUB_RUN_NUMBER}.zip"
+          cp "$SOURCE_ZIP" "$INSTALL_ZIP"
+          unzip -l "$INSTALL_ZIP" | grep -q 'module.prop'
+          unzip -l "$INSTALL_ZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$INSTALL_ZIP" | grep -q 'zygisk/arm64-v8a.so'
+          echo "path=$INSTALL_ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Publish direct-install ZIP as prerelease asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="ci-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            "${{ steps.module.outputs.path }}#zygisk-memdump-direct-install.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "CI build ${GITHUB_RUN_NUMBER}" \
+            --notes "Direct-install APatch/Magisk module built from $GITHUB_SHA. Download the release asset named zygisk-memdump-direct-install.zip; do not flash the GitHub Actions artifact wrapper."
