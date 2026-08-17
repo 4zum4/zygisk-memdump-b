@@ -6,13 +6,18 @@ else ()
     project(${TOOL_NAME})
 endif ()
 
-set(SRC_FILE "${CMAKE_SOURCE_DIR}/include/logcat.h")
-add_custom_command(
-        OUTPUT "${SRC_FILE}"
-        COMMAND sed -i '' 's|".*"|"/data/adb/modules/${MODULE_DIR}/config"|g' "${SRC_FILE}"
-        COMMENT "Replacing strings in logcat.h with the config file path"
-)
-add_custom_target(replace_config ALL DEPENDS "${SRC_FILE}")
+# Generate the config-path header in the build tree instead of editing a
+# tracked source file with platform-specific `sed -i` syntax. This works on
+# Linux/macOS/Windows hosts and avoids races when multiple ABIs are built.
+set(GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GENERATED_INCLUDE_DIR}")
+file(WRITE "${GENERATED_INCLUDE_DIR}/logcat.h"
+"#ifndef ZYGISK_MEMDUMP_LOGCAT_H\n"
+"#define ZYGISK_MEMDUMP_LOGCAT_H\n\n"
+"#include <string>\n\n"
+"const std::string config_file_path = \"/data/adb/modules/${MODULE_DIR}/config\";\n\n"
+"void logcat();\n\n"
+"#endif // ZYGISK_MEMDUMP_LOGCAT_H\n")
 
 message("Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -36,7 +41,7 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINKER_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${LINKER_FLAGS}")
 
 add_executable(${TOOL_NAME} main.cpp logcat.cpp)
-add_dependencies(${TOOL_NAME} replace_config)
+target_include_directories(${TOOL_NAME} BEFORE PRIVATE "${GENERATED_INCLUDE_DIR}")
 target_link_libraries(${TOOL_NAME} log)
 
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
