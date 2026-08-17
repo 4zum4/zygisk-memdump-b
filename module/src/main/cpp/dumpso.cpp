@@ -45,7 +45,7 @@ bool write_memory_range(std::ofstream& out, uintptr_t address, size_t size) {
     while (done < size) {
         const size_t want = std::min(kReadChunk, size - done);
         const void* remote = reinterpret_cast<const void*>(address + done);
-        ssize_t got = read_self_memory(buffer.data(), remote, want);
+        const ssize_t got = read_self_memory(buffer.data(), remote, want);
 
         if (got > 0) {
             out.write(reinterpret_cast<const char*>(buffer.data()), got);
@@ -87,6 +87,26 @@ void save_module_maps(const std::string& path, uintptr_t module_base, size_t mod
         }
         sidecar << line << '\n';
     }
+}
+
+bool should_run_sofixer(bool complete, const std::string& dump_so_path) {
+    if (!complete) {
+        LOGW("skip SoFixer for incomplete snapshot: %s", dump_so_path.c_str());
+        return false;
+    }
+
+    std::ifstream in(dump_so_path, std::ifstream::in | std::ifstream::binary);
+    unsigned char ident[4] = {};
+    if (!in.is_open() || !in.read(reinterpret_cast<char*>(ident), sizeof(ident))) {
+        LOGW("skip SoFixer: unable to validate ELF header");
+        return false;
+    }
+
+    if (ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' || ident[3] != 'F') {
+        LOGW("skip SoFixer: snapshot does not start with ELF magic");
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -141,7 +161,8 @@ void delay_section_dump_thread(const std::string& dump_so_path,
                                uintptr_t module_base,
                                uintptr_t offset,
                                size_t module_size,
-                               uint delay) {
+                               uint delay,
+                               bool initial_complete) {
     usleep(delay);
 
     if (offset > module_size) {
@@ -163,13 +184,18 @@ void delay_section_dump_thread(const std::string& dump_so_path,
         return;
     }
 
-    const bool complete = write_memory_range(dump, module_base + offset, remaining_size);
+    const bool remaining_complete =
+            write_memory_range(dump, module_base + offset, remaining_size);
     dump.close();
+    const bool snapshot_complete = initial_complete && remaining_complete;
+
     LOGD("mem dump: %p, %zu bytes (%s)",
          reinterpret_cast<const void*>(module_base + offset), remaining_size,
-         complete ? "complete" : "with zero-filled gaps");
+         snapshot_complete ? "complete" : "with zero-filled gaps");
     LOGD("%s dump done", module_name_to_dump.c_str());
     LOGD("Output: %s", dump_so_path.c_str());
+
+    if (!should_run_sofixer(snapshot_complete, dump_so_path)) return;
 
     const int res = fix_so(dump_so_path, module_base, module_size);
     if (res == 1) {
@@ -223,15 +249,15 @@ void dump_so(std::string& package_name,
         }
 
         if (offset > module_size) offset = module_size;
-        const bool complete = write_memory_range(dump, module_base, offset);
+        const bool initial_complete = write_memory_range(dump, module_base, offset);
         dump.close();
 
         LOGD("initial mem dump: %p, %zu bytes (%s)",
              reinterpret_cast<const void*>(module_base), static_cast<size_t>(offset),
-             complete ? "complete" : "with zero-filled gaps");
+             initial_complete ? "complete" : "with zero-filled gaps");
 
         std::thread t(delay_section_dump_thread, dump_so_path, module_base,
-                      offset, module_size, delay_section);
+                      offset, module_size, delay_section, initial_complete);
         t.detach();
         return;
     }
@@ -244,6 +270,8 @@ void dump_so(std::string& package_name,
          complete ? "complete" : "with zero-filled gaps");
     LOGD("%s dump done", module_name_to_dump.c_str());
     LOGD("Output: %s", dump_so_path.c_str());
+
+    if (!should_run_sofixer(complete, dump_so_path)) return;
 
     const int res = fix_so(dump_so_path, module_base, module_size);
     if (res == 1) {
