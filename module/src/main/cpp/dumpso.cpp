@@ -1,7 +1,9 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -55,9 +57,6 @@ bool write_memory_range(std::ofstream& out, uintptr_t address, size_t size) {
                 complete = false;
             }
         } else {
-            // Do not crash the target because one page is inaccessible or was
-            // remapped between module enumeration and dumping. Preserve file
-            // offsets by writing zeros for the unreadable range.
             out.write(reinterpret_cast<const char*>(zeros.data()), want);
             LOGW("memory read failed at %p (%zu bytes, errno=%d); zero-filled",
                  remote, want, errno);
@@ -209,7 +208,7 @@ void dump_so(std::string& package_name,
 
     uintptr_t offset = 0;
     if (delay_section > 0) {
-        section_addr = 0; // never reuse an address discovered for an earlier module
+        section_addr = 0;
         gum_module_enumerate_sections(so_path, section_found, nullptr);
 
         if (section_addr >= module_base &&
